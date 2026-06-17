@@ -23,6 +23,19 @@ This utility runs as a lightweight background service in the system tray. When y
 
 ---
 
+## Configuration
+You can customize the target DAC audio device name by modifying the `config.ini` file located next to the executable.
+
+To configure the device name:
+1. Right-click the system tray icon and select **Configuración**. This will automatically open (or create) the `config.ini` file in your default text editor.
+2. Under `[Device]`, set `Name` to a keyword or the full name of your DAC (e.g., `Name=iFi Zen DAC`).
+3. Save the file and close the editor.
+4. Right-click the tray icon and select **Reiniciar** to reload the configuration and apply the changes.
+
+*Note: If no custom name is configured or the file is missing/empty, the utility falls back to search for default keywords (`ifi`, `zen dac`, `amr hd+`).*
+
+---
+
 ## Screenshots
 
 ### System Tray Menu

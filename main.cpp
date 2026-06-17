@@ -47,6 +47,7 @@ VOID CALLBACK TimerCallback(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime
 #define ID_TRAY_PAUSE 2001
 #define ID_TRAY_RESTART 2002
 #define ID_TRAY_EXIT 2003
+#define ID_TRAY_CONFIG 2004
 
 /**
  * @brief Window procedure for the hidden helper window.
@@ -70,6 +71,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                     }
                     
                     AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESTART, L"Reiniciar");
+                    AppendMenuW(hMenu, MF_STRING, ID_TRAY_CONFIG, L"Configuración");
                     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                     AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Salir");
                     
@@ -95,6 +97,30 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                         g_pService->Restart();
                     }
                     break;
+                case ID_TRAY_CONFIG: {
+                    wchar_t exePath[MAX_PATH];
+                    wchar_t configPath[MAX_PATH] = L"";
+                    if (GetModuleFileNameW(NULL, exePath, MAX_PATH)) {
+                        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+                        if (lastSlash) {
+                            *lastSlash = L'\0';
+                            swprintf_s(configPath, MAX_PATH, L"%ls\\config.ini", exePath);
+                            
+                            // Check if config.ini exists. If not, create a default template.
+                            DWORD dwAttrib = GetFileAttributesW(configPath);
+                            if (dwAttrib == INVALID_FILE_ATTRIBUTES || (dwAttrib & FILE_ATTRIBUTE_DIRECTORY)) {
+                                FILE* f = NULL;
+                                if (_wfopen_s(&f, configPath, L"w, ccs=UTF-8") == 0) {
+                                    fputws(L"[Device]\nName=iFi Zen DAC\n", f);
+                                    fclose(f);
+                                }
+                            }
+                            
+                            ShellExecuteW(NULL, L"open", configPath, NULL, NULL, SW_SHOWNORMAL);
+                        }
+                    }
+                    break;
+                }
                 case ID_TRAY_EXIT:
                     DestroyWindow(hwnd);
                     break;

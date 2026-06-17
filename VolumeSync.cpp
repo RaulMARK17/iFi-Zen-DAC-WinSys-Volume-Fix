@@ -235,7 +235,8 @@ VolumeSyncService::VolumeSyncService() :
     m_isHooked(false),
     m_lastEffectiveVolume(-1.0f),
     m_isMuted(FALSE),
-    m_isPaused(false) {
+    m_isPaused(false),
+    m_targetDeviceName(L"") {
 }
 
 /**
@@ -250,6 +251,8 @@ VolumeSyncService::~VolumeSyncService() {
  * @return True on success, false on failure.
  */
 bool VolumeSyncService::Initialize() {
+    LoadConfig();
+
     HRESULT hr = CoCreateInstance(
         __uuidof(MMDeviceEnumerator),
         NULL,
@@ -339,9 +342,35 @@ bool VolumeSyncService::GetDeviceFriendlyName(IMMDevice* pDevice, std::wstring& 
 }
 
 /**
- * @brief Compares a device friendly name against the target iFi ZEN DAC criteria.
+ * @brief Loads custom configuration from config.ini file next to the executable.
+ */
+void VolumeSyncService::LoadConfig() {
+    wchar_t exePath[MAX_PATH];
+    wchar_t configPath[MAX_PATH] = L"";
+    if (GetModuleFileNameW(NULL, exePath, MAX_PATH)) {
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) {
+            *lastSlash = L'\0';
+            swprintf_s(configPath, MAX_PATH, L"%ls\\config.ini", exePath);
+        }
+    }
+    
+    wchar_t targetName[256] = L"";
+    GetPrivateProfileStringW(L"Device", L"Name", L"", targetName, 256, configPath);
+    
+    m_targetDeviceName = targetName;
+    
+    if (!m_targetDeviceName.empty()) {
+        LogEssential(L"Loaded custom target device name from config: '%s'\n", m_targetDeviceName.c_str());
+    } else {
+        LogEssential(L"No custom target device name configured. Using default keywords ('ifi', 'zen dac', 'amr hd+').\n");
+    }
+}
+
+/**
+ * @brief Compares a device friendly name against the target criteria.
  * @param deviceName Friendly name of the audio device.
- * @return True if the name contains "ifi", "zen dac", or "amr hd+", false otherwise.
+ * @return True if the name matches config or default criteria.
  */
 bool VolumeSyncService::IsTargetDevice(const std::wstring& deviceName) {
     std::wstring lowerName = deviceName;
@@ -349,7 +378,16 @@ bool VolumeSyncService::IsTargetDevice(const std::wstring& deviceName) {
         return std::towlower(c);
     });
     
-    // Check if name contains target keywords
+    // If a custom target device name is loaded from config, check for matches
+    if (!m_targetDeviceName.empty()) {
+        std::wstring lowerTarget = m_targetDeviceName;
+        std::transform(lowerTarget.begin(), lowerTarget.end(), lowerTarget.begin(), [](wchar_t c) {
+            return std::towlower(c);
+        });
+        return (lowerName.find(lowerTarget) != std::wstring::npos);
+    }
+    
+    // Fallback to default keywords if no config.ini was found or configured
     if (lowerName.find(L"ifi") != std::wstring::npos ||
         lowerName.find(L"zen dac") != std::wstring::npos ||
         lowerName.find(L"amr hd+") != std::wstring::npos) {
@@ -872,6 +910,7 @@ void VolumeSyncService::SetPaused(bool bPaused) {
 
 void VolumeSyncService::Restart() {
     LogEssential(L"Restarting volume hook configuration...\n");
+    LoadConfig();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         UnhookVolume();

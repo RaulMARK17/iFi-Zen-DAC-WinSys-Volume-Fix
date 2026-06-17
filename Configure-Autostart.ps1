@@ -34,6 +34,14 @@ if (-not (Test-Path $ExePath)) {
     return
 }
 
+# Copy config.ini if it exists in the script directory to the build directory
+$ConfigSrc = Join-Path $PSScriptRoot "config.ini"
+$ConfigDest = Join-Path (Split-Path $ExePath) "config.ini"
+if (Test-Path $ConfigSrc) {
+    Copy-Item -Path $ConfigSrc -Destination $ConfigDest -Force
+    Write-Host "Success: Copied config.ini to $ConfigDest" -ForegroundColor Green
+}
+
 # Set the registry key to execute the service at startup
 try {
     Set-ItemProperty -Path $RegistryPath -Name $ValueName -Value "`"$ExePath`"" -Type String

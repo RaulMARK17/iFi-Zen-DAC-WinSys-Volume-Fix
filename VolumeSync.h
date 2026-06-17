@@ -212,6 +212,12 @@ private:
     std::mutex m_mutex;                                  /**< Mutex protecting multi-threaded COM calls and state changes. */
 
     std::map<std::wstring, float> m_sessionVolumeCache;  /**< Cache mapping session instance IDs to original baseline volumes. */
+    std::wstring m_targetDeviceName;                     /**< Cached target device keyword/name loaded from config. */
+
+    /**
+     * @brief Loads custom configuration from config.ini file.
+     */
+    void LoadConfig();
 
     /**
      * @brief Retrives the user-friendly name of an audio device.
