@@ -678,11 +678,15 @@ void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManage
             auto it = m_sessionVolumeCache.find(sessionId);
             if (it == m_sessionVolumeCache.end()) {
                 // Not in cache, this is first contact with the session. Cache its current volume!
-                m_sessionVolumeCache[sessionId] = { fCurrentVolume, fMasterVolume };
+                float fRefMaster = fMasterVolume;
+                if (fRefMaster < 0.10f) {
+                    fRefMaster = 1.0f;
+                }
+                m_sessionVolumeCache[sessionId] = { fCurrentVolume, fRefMaster };
                 fOriginalSessionVol = fCurrentVolume;
-                fOriginalMasterVol = fMasterVolume;
+                fOriginalMasterVol = fRefMaster;
                 LogInfo(L"Session '%ls' cached. Initial Volume: %.2f, Master Reference: %.2f\n", 
-                        sessionId.c_str(), fCurrentVolume, fMasterVolume);
+                        sessionId.c_str(), fCurrentVolume, fRefMaster);
             } else {
                 fOriginalSessionVol = it->second.initialSessionVolume;
                 fOriginalMasterVol = it->second.initialMasterVolume;
@@ -703,11 +707,15 @@ void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManage
                     if (std::abs(fCurrentVolume - fExpectedAtLastSync) > 0.015f) {
                         // User manually adjusted this specific application's slider or the app updated its own volume.
                         // Update cache to set a new baseline at the current master volume level.
-                        m_sessionVolumeCache[sessionId] = { fCurrentVolume, fMasterVolume };
+                        float fRefMaster = fMasterVolume;
+                        if (fRefMaster < 0.10f) {
+                            fRefMaster = 1.0f;
+                        }
+                        m_sessionVolumeCache[sessionId] = { fCurrentVolume, fRefMaster };
                         fOriginalSessionVol = fCurrentVolume;
-                        fOriginalMasterVol = fMasterVolume;
+                        fOriginalMasterVol = fRefMaster;
                         LogInfo(L"Manual adjustment detected for session '%ls'. New baseline cached: %.2f at Master: %.2f\n", 
-                                sessionId.c_str(), fCurrentVolume, fMasterVolume);
+                                sessionId.c_str(), fCurrentVolume, fRefMaster);
                     }
                 }
             }
