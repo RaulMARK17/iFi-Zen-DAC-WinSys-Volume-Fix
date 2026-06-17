@@ -689,31 +689,6 @@ void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManage
                         sessionId.c_str(), fCurrentVolume);
             } else {
                 fBaseline = it->second;
-                
-                // DETECT EXTERNAL/MANUAL ADJUSTMENT:
-                // Check if current volume differs from what we expected based on the last sync master volume.
-                float fLastMasterVolRef = m_lastEffectiveVolume.load();
-                if (fLastMasterVolRef >= 0.0f) {
-                    float fExpectedAtLastSync = fBaseline * fLastMasterVolRef;
-                    if (fExpectedAtLastSync < 0.0f) fExpectedAtLastSync = 0.0f;
-                    if (fExpectedAtLastSync > 1.0f) fExpectedAtLastSync = 1.0f;
-                    
-                    if (std::abs(fCurrentVolume - fExpectedAtLastSync) > 0.015f) {
-                        // User manually adjusted this specific application's slider or the app updated its own volume.
-                        // Calculate new baseline so that at the current master volume, the output matches fCurrentVolume.
-                        float fNewBaseline = fCurrentVolume;
-                        if (fMasterVolume > 0.05f) {
-                            fNewBaseline = fCurrentVolume / fMasterVolume;
-                        }
-                        if (fNewBaseline > 1.0f) fNewBaseline = 1.0f;
-                        if (fNewBaseline < 0.0f) fNewBaseline = 0.0f;
-                        
-                        m_sessionVolumeCache[sessionId] = fNewBaseline;
-                        fBaseline = fNewBaseline;
-                        LogInfo(L"Manual adjustment detected for session '%ls'. Current Volume: %.2f. New baseline: %.2f (Master: %.2f)\n", 
-                                sessionId.c_str(), fCurrentVolume, fNewBaseline, fMasterVolume);
-                    }
-                }
             }
             
             // Scale proportionally: target = baseline * current_master_volume

@@ -174,10 +174,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
     
-    // Try to load standard audio/speaker icon from shell32.dll
-    nid.hIcon = ExtractIconW(hInstance, L"shell32.dll", 224);
-    if (!nid.hIcon || nid.hIcon == (HICON)1) {
-        nid.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(32512));
+    // Try to load standard audio/speaker icon using SHGetStockIconInfo (SIID_AUDIO = 71)
+    SHSTOCKICONINFO sii = {};
+    sii.cbSize = sizeof(sii);
+    if (SUCCEEDED(SHGetStockIconInfo((SHSTOCKICONID)71, 0x00000100 | 0x00000001, &sii))) { // SHGSI_ICON | SHGSI_SMALLICON
+        nid.hIcon = sii.hIcon;
+    } else {
+        nid.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(32512)); // Fallback to IDI_APPLICATION
     }
     
     wcscpy_s(nid.szTip, L"iFi Zen DAC Volume Sync");
