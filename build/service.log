@@ -4031,3 +4031,17 @@
 [2026-06-16 19:25:54.136] Volume Callback - Master Volume changed to: 0.96 (Muted: NO)
 [2026-06-16 19:25:54.182] Volume Callback - Master Volume changed to: 0.98 (Muted: NO)
 [2026-06-16 19:25:54.200] Volume Callback - Master Volume changed to: 1.00 (Muted: NO)
+[2026-06-16 19:27:37.929] ifi Zen DAC Volume Sync Service starting...
+[2026-06-16 19:27:37.960] Target device 'ifi Zen DAC 3 (AMR HD+ USB Audio)' detected. Hooking volume controls...
+[2026-06-16 19:27:37.967] Successfully hooked volume. Initial master volume: 1.00 (Muted: NO)
+[2026-06-16 19:27:37.976] Session '{0.0.0.00000000}.{3d779d8f-1be3-48f8-8eee-523a40da69f5}|\Device\HarddiskVolume3\Users\AL204\AppData\Local\VortxEngine\app-2.5.66\Signal-x64\SignalRgb.exe%b{00000000-0000-0000-0000-000000000000}|1%b7144' cached baseline volume: 1.00
+[2026-06-16 19:27:37.982] Session '{0.0.0.00000000}.{3d779d8f-1be3-48f8-8eee-523a40da69f5}|#%b{A9EF3FD9-4240-455E-A4D5-F2B3301887B2}|1%b#' cached baseline volume: 1.00
+[2026-06-16 19:27:37.988] Session '{0.0.0.00000000}.{9cc65799-e5bf-47a4-b3ff-6a40e30cfb18}|\Device\HarddiskVolume3\Users\AL204\AppData\Local\VortxEngine\app-2.5.66\Signal-x64\SignalRgb.exe%b{00000000-0000-0000-0000-000000000000}|1%b7144' cached baseline volume: 1.00
+[2026-06-16 19:27:37.994] Session '{0.0.0.00000000}.{9cc65799-e5bf-47a4-b3ff-6a40e30cfb18}|#%b{A9EF3FD9-4240-455E-A4D5-F2B3301887B2}|1%b#' cached baseline volume: 1.00
+[2026-06-16 19:27:38.000] Session '{0.0.0.00000000}.{d2f65da0-5fa7-4185-9d8d-9a501f249a34}|\Device\HarddiskVolume3\Users\AL204\AppData\Local\VortxEngine\app-2.5.66\Signal-x64\SignalRgb.exe%b{00000000-0000-0000-0000-000000000000}|1%b7144' cached baseline volume: 1.00
+[2026-06-16 19:27:38.006] Session '{0.0.0.00000000}.{d2f65da0-5fa7-4185-9d8d-9a501f249a34}|#%b{A9EF3FD9-4240-455E-A4D5-F2B3301887B2}|1%b#' cached baseline volume: 1.00
+[2026-06-16 19:27:38.013] Session '{0.0.0.00000000}.{dd3106f2-6a69-41c7-8a5e-446dbe75323c}|\Device\HarddiskVolume3\Users\AL204\AppData\Local\VortxEngine\app-2.5.66\Signal-x64\SignalRgb.exe%b{00000000-0000-0000-0000-000000000000}|1%b7144' cached baseline volume: 1.00
+[2026-06-16 19:27:38.019] Session '{0.0.0.00000000}.{dd3106f2-6a69-41c7-8a5e-446dbe75323c}|\Device\HarddiskVolume3\Users\AL204\AppData\Local\Programs\Antigravity\Antigravity.exe%b{00000000-0000-0000-0000-000000000000}|1%b9704' cached baseline volume: 0.60
+[2026-06-16 19:27:38.024] Session '{0.0.0.00000000}.{dd3106f2-6a69-41c7-8a5e-446dbe75323c}|\Device\HarddiskVolume3\Program Files (x86)\Microsoft\EdgeWebView\Application\149.0.4022.69\msedgewebview2.exe%b{00000000-0000-0000-0000-000000000000}|1%b9448' cached baseline volume: 1.00
+[2026-06-16 19:27:38.029] Session '{0.0.0.00000000}.{dd3106f2-6a69-41c7-8a5e-446dbe75323c}|#%b{A9EF3FD9-4240-455E-A4D5-F2B3301887B2}|1%b#' cached baseline volume: 1.00
+[2026-06-16 19:27:38.035] Service initialized successfully. Running background message loop...
