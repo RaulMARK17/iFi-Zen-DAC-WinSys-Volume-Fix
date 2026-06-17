@@ -174,12 +174,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
     
-    // Try to load standard audio/speaker icon using SHGetStockIconInfo (SIID_AUDIO = 71)
-    SHSTOCKICONINFO sii = {};
-    sii.cbSize = sizeof(sii);
-    if (SUCCEEDED(SHGetStockIconInfo((SHSTOCKICONID)71, 0x00000100 | 0x00000001, &sii))) { // SHGSI_ICON | SHGSI_SMALLICON
-        nid.hIcon = sii.hIcon;
-    } else {
+    // Try to load speaker icon from SndVol.exe in the System32 directory
+    wchar_t sysDir[MAX_PATH];
+    GetSystemDirectoryW(sysDir, MAX_PATH);
+    std::wstring sndVolPath = std::wstring(sysDir) + L"\\SndVol.exe";
+    nid.hIcon = ExtractIconW(hInstance, sndVolPath.c_str(), 0);
+    if (!nid.hIcon || nid.hIcon == (HICON)1) {
         nid.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(32512)); // Fallback to IDI_APPLICATION
     }
     
