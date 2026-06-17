@@ -19,4 +19,5 @@ add_executable(ifi_volume_sync WIN32 ${SOURCES})
 target_link_libraries(ifi_volume_sync PRIVATE
     ole32
     uuid
+    shell32
 )

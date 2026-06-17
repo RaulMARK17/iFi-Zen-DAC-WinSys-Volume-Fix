@@ -234,7 +234,8 @@ VolumeSyncService::VolumeSyncService() :
     m_pSessionNotification(NULL),
     m_isHooked(false),
     m_lastEffectiveVolume(-1.0f),
-    m_isMuted(FALSE) {
+    m_isMuted(FALSE),
+    m_isPaused(false) {
 }
 
 /**
@@ -588,6 +589,7 @@ void VolumeSyncService::SyncMasterVolumeToSessions(float fMasterVolume, bool bFo
  * @note Caller must hold m_mutex.
  */
 void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume, bool bForceUpdateBaselines) {
+    if (m_isPaused.load()) return;
     if (!m_pEnumerator) return;
     
     // ENUMERATE ALL ACTIVE PLAYBACK DEVICES:
@@ -875,4 +877,27 @@ std::wstring VolumeSyncService::GetFallbackSessionId(IAudioSessionControl* pSess
     wchar_t buf[64];
     swprintf_s(buf, L"PTR_%p", pSessionControl);
     return buf;
+}
+
+void VolumeSyncService::SetPaused(bool bPaused) {
+    if (m_isPaused.load() == bPaused) return;
+    
+    m_isPaused = bPaused;
+    LogEssential(L"Service %ls\n", bPaused ? L"PAUSED" : L"RESUMED");
+    
+    if (bPaused) {
+        // Restore all applications to their original baseline volumes on pause
+        std::lock_guard<std::mutex> lock(m_mutex);
+        RestoreSessionOriginalVolumes();
+    } else {
+        // Force baseline update from current Windows volume levels and scale them immediately on resume
+        SyncMasterVolumeToSessions(m_lastEffectiveVolume, true);
+    }
+}
+
+void VolumeSyncService::Restart() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    LogEssential(L"Restarting volume hook configuration...\n");
+    UnhookVolume();
+    CheckAndConfigureDevice();
 }

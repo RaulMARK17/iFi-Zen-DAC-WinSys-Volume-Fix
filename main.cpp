@@ -7,6 +7,7 @@
  */
 
 #include <windows.h>
+#include <shellapi.h>
 #include "VolumeSync.h"
 
 /**
@@ -28,6 +29,9 @@ VolumeSyncService* g_pService = NULL;
  */
 VOID CALLBACK TimerCallback(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
     if (g_pService) {
+        if (g_pService->IsPaused()) {
+            return;
+        }
         if (!g_pService->IsHooked()) {
             g_pService->CheckAndConfigureDevice();
         } else {
@@ -37,6 +41,74 @@ VOID CALLBACK TimerCallback(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime
             }
         }
     }
+}
+
+#define WM_TRAYICON (WM_USER + 1)
+#define ID_TRAY_PAUSE 2001
+#define ID_TRAY_RESTART 2002
+#define ID_TRAY_EXIT 2003
+
+/**
+ * @brief Window procedure for the hidden helper window.
+ * @details Processes right-click mouse events on the notification tray icon
+ *          to render a dynamic context menu, and dispatches menu commands.
+ */
+LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+        case WM_TRAYICON: {
+            if (lParam == WM_RBUTTONUP) {
+                POINT curPoint;
+                GetCursorPos(&curPoint);
+                
+                HMENU hMenu = CreatePopupMenu();
+                if (hMenu) {
+                    bool isPaused = g_pService ? g_pService->IsPaused() : false;
+                    if (isPaused) {
+                        AppendMenuW(hMenu, MF_STRING, ID_TRAY_PAUSE, L"Reanudar");
+                    } else {
+                        AppendMenuW(hMenu, MF_STRING, ID_TRAY_PAUSE, L"Pausar");
+                    }
+                    
+                    AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESTART, L"Reiniciar");
+                    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+                    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Salir");
+                    
+                    // Required by TrackPopupMenu for tray icons to handle focus/dismiss correctly
+                    SetForegroundWindow(hwnd);
+                    
+                    TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, curPoint.x, curPoint.y, 0, hwnd, NULL);
+                    DestroyMenu(hMenu);
+                }
+            }
+            break;
+        }
+        case WM_COMMAND: {
+            int wmId = LOWORD(wParam);
+            switch (wmId) {
+                case ID_TRAY_PAUSE:
+                    if (g_pService) {
+                        g_pService->SetPaused(!g_pService->IsPaused());
+                    }
+                    break;
+                case ID_TRAY_RESTART:
+                    if (g_pService) {
+                        g_pService->Restart();
+                    }
+                    break;
+                case ID_TRAY_EXIT:
+                    DestroyWindow(hwnd);
+                    break;
+            }
+            break;
+        }
+        case WM_DESTROY: {
+            PostQuitMessage(0);
+            break;
+        }
+        default:
+            return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    }
+    return 0;
 }
 
 /**
@@ -72,9 +144,47 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     VolumeSyncService service;
     g_pService = &service;
 
+    // Register hidden window class
+    const wchar_t CLASS_NAME[] = L"ifiZenDACVolumeSyncServiceWindow";
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = CLASS_NAME;
+    RegisterClassW(&wc);
+
+    // Create hidden window
+    HWND hwnd = CreateWindowExW(
+        0, CLASS_NAME, L"iFi Volume Sync Service",
+        0, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        NULL, NULL, hInstance, NULL
+    );
+
+    if (hwnd == NULL) {
+        LogEssential(L"Failed to create hidden utility window.\n");
+        CoUninitialize();
+        CloseHandle(hMutex);
+        return 1;
+    }
+
+    // Add speaker icon to system tray
+    NOTIFYICONDATAW nid = {};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAYICON;
+    
+    // Try to load standard audio/speaker icon from shell32.dll
+    nid.hIcon = ExtractIconW(hInstance, L"shell32.dll", 224);
+    if (!nid.hIcon || nid.hIcon == (HICON)1) {
+        nid.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(32512));
+    }
+    
+    wcscpy_s(nid.szTip, L"iFi Zen DAC Volume Sync");
+    Shell_NotifyIconW(NIM_ADD, &nid);
+
     // Set up a self-healing timer to verify and reconnect every 2 seconds.
-    // This safeguards against device initialization race conditions on startup or hot-plugs.
-    UINT_PTR timerId = SetTimer(NULL, 0, 2000, TimerCallback);
+    UINT_PTR timerId = SetTimer(hwnd, 1, 2000, TimerCallback);
     if (timerId == 0) {
         LogEssential(L"Failed to set self-healing timer.\n");
     }
@@ -90,7 +200,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
         
         if (timerId != 0) {
-            KillTimer(NULL, timerId);
+            KillTimer(hwnd, timerId);
         }
         g_pService = NULL;
         
@@ -98,9 +208,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     } else {
         LogEssential(L"Failed to initialize VolumeSyncService.\n");
         if (timerId != 0) {
-            KillTimer(NULL, timerId);
+            KillTimer(hwnd, timerId);
         }
         g_pService = NULL;
+    }
+
+    // Clean up system tray icon
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+    if (nid.hIcon) {
+        DestroyIcon(nid.hIcon);
     }
 
     CoUninitialize();

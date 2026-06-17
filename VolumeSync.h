@@ -208,6 +208,7 @@ private:
     std::atomic<bool> m_isHooked;                        /**< Atomic flag indicating if the target volume is hooked. */
     std::atomic<float> m_lastEffectiveVolume;            /**< Atomic storage for the last known master volume level. */
     std::atomic<bool> m_isMuted;                         /**< Atomic flag indicating if target device is currently muted. */
+    std::atomic<bool> m_isPaused;                        /**< Atomic flag indicating if the service execution is paused. */
     std::mutex m_mutex;                                  /**< Mutex protecting multi-threaded COM calls and state changes. */
 
     std::map<std::wstring, float> m_sessionVolumeCache;  /**< Cache mapping session instance IDs to original baseline volumes. */
@@ -281,6 +282,23 @@ public:
      * @return True if muted, false otherwise.
      */
     bool IsMuted() const { return m_isMuted.load(); }
+
+    /**
+     * @brief Checks if the volume synchronization service is currently paused.
+     * @return True if paused, false otherwise.
+     */
+    bool IsPaused() const { return m_isPaused.load(); }
+
+    /**
+     * @brief Pauses or resumes the volume synchronization logic.
+     * @param bPaused True to pause, false to resume.
+     */
+    void SetPaused(bool bPaused);
+
+    /**
+     * @brief Triggers a restart of the device hook configuration (unhooks, restores, and re-hooks).
+     */
+    void Restart();
 
     /**
      * @brief Handles system notifications when default playback device switches.
