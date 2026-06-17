@@ -871,8 +871,10 @@ void VolumeSyncService::SetPaused(bool bPaused) {
 }
 
 void VolumeSyncService::Restart() {
-    std::lock_guard<std::mutex> lock(m_mutex);
     LogEssential(L"Restarting volume hook configuration...\n");
-    UnhookVolume();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        UnhookVolume();
+    }
     CheckAndConfigureDevice();
 }

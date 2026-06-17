@@ -1,3 +1,0 @@
-C:\Tools\mingw64\bin\cmake.exe -E rm -f CMakeFiles\ifi_volume_sync.dir/objects.a
-C:\Tools\mingw64\bin\ar.exe qc CMakeFiles\ifi_volume_sync.dir/objects.a @CMakeFiles\ifi_volume_sync.dir\objects1.rsp
-C:\Tools\mingw64\bin\c++.exe -mwindows -Wl,--whole-archive CMakeFiles\ifi_volume_sync.dir/objects.a -Wl,--no-whole-archive -o ifi_volume_sync.exe -Wl,--out-implib,libifi_volume_sync.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\ifi_volume_sync.dir\linkLibs.rsp
