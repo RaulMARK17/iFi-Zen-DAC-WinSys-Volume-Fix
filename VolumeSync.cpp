@@ -212,22 +212,7 @@ STDMETHODIMP AudioSessionNotification::OnSessionCreated(IAudioSessionControl* Ne
     if (NewSession == NULL) return E_POINTER;
     LogInfo(L"Audio Session Created Notification received.\n");
     if (m_pService) {
-        float fMasterVolume = m_pService->GetLastEffectiveVolume();
-        if (fMasterVolume >= 0.0f) {
-            ISimpleAudioVolume* pSimpleVolume = NULL;
-            HRESULT hr = NewSession->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pSimpleVolume);
-            if (SUCCEEDED(hr)) {
-                hr = pSimpleVolume->SetMasterVolume(fMasterVolume, NULL);
-                if (SUCCEEDED(hr)) {
-                    LogInfo(L"Directly initialized new session volume to: %.2f\n", fMasterVolume);
-                } else {
-                    LogEssential(L"Failed to set new session volume. hr = 0x%08X\n", hr);
-                }
-                pSimpleVolume->Release();
-            } else {
-                LogEssential(L"Failed to query ISimpleAudioVolume in OnSessionCreated. hr = 0x%08X\n", hr);
-            }
-        }
+        m_pService->RegisterNewSession(NewSession);
     }
     return S_OK;
 }
@@ -662,7 +647,10 @@ void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManage
         
         IAudioSessionControl2* pSessionControl2 = NULL;
         hr = pSessionControl->QueryInterface(__uuidof(IAudioSessionControl2), (void**)&pSessionControl2);
-        if (SUCCEEDED(hr)) {
+        std::wstring sessionId;
+        bool hasControl2 = SUCCEEDED(hr) && pSessionControl2;
+        
+        if (hasControl2) {
             AudioSessionState state;
             pSessionControl2->GetState(&state);
             
@@ -672,42 +660,78 @@ void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManage
                 pSessionControl->Release();
                 continue;
             }
-            
-            ISimpleAudioVolume* pSimpleVolume = NULL;
-            hr = pSessionControl->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pSimpleVolume);
-            if (SUCCEEDED(hr)) {
-                float fCurrentVolume = 1.0f;
-                pSimpleVolume->GetMasterVolume(&fCurrentVolume);
-                
-                // HOW THE LAG IS ELIMINATED & THE SLIDER VALUES ARE UPDATED:
-                // 1. Direct 1:1 Scaling: The application's volume is set to match the master volume
-                //    of the iFi DAC directly. This eliminates complex math, saving, and reading of 
-                //    proportional baseline limits which previously generated a feedback loop that 
-                //    lagged and delayed slider movements during drags.
-                // 2. High-Performance Differential Check (delta threshold > 0.001f):
-                //    Instead of calling SetMasterVolume() continuously on every drag increment, we query 
-                //    the current volume first and only commit the update if it has changed. This 
-                //    minimizes COM IPC message roundtrips to the Windows Audio Service (AudioSrv), 
-                //    preventing queue backups and achieving instant, fluid, and highly responsive changes.
-                float fTargetVolume = fMasterVolume;
-                if (std::abs(fCurrentVolume - fTargetVolume) > 0.001f) {
-                    pSimpleVolume->SetMasterVolume(fTargetVolume, NULL);
-                }
-                pSimpleVolume->Release();
-            }
-            pSessionControl2->Release();
+            GetSessionId(pSessionControl2, sessionId);
         } else {
-            // Fallback path for classic audio sessions that lack the IAudioSessionControl2 interface.
-            ISimpleAudioVolume* pSimpleVolume = NULL;
-            hr = pSessionControl->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pSimpleVolume);
-            if (SUCCEEDED(hr)) {
-                float fCurrentVolume = 1.0f;
-                pSimpleVolume->GetMasterVolume(&fCurrentVolume);
-                if (std::abs(fCurrentVolume - fMasterVolume) > 0.001f) {
-                    pSimpleVolume->SetMasterVolume(fMasterVolume, NULL);
+            sessionId = GetFallbackSessionId(pSessionControl);
+        }
+        
+        ISimpleAudioVolume* pSimpleVolume = NULL;
+        hr = pSessionControl->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pSimpleVolume);
+        if (SUCCEEDED(hr) && pSimpleVolume) {
+            float fCurrentVolume = 1.0f;
+            pSimpleVolume->GetMasterVolume(&fCurrentVolume);
+            
+            // Look up or cache original session volume level
+            float fOriginalSessionVol = 1.0f;
+            float fOriginalMasterVol = 1.0f;
+            
+            auto it = m_sessionVolumeCache.find(sessionId);
+            if (it == m_sessionVolumeCache.end()) {
+                // Not in cache, this is first contact with the session. Cache its current volume!
+                m_sessionVolumeCache[sessionId] = { fCurrentVolume, fMasterVolume };
+                fOriginalSessionVol = fCurrentVolume;
+                fOriginalMasterVol = fMasterVolume;
+                LogInfo(L"Session '%ls' cached. Initial Volume: %.2f, Master Reference: %.2f\n", 
+                        sessionId.c_str(), fCurrentVolume, fMasterVolume);
+            } else {
+                fOriginalSessionVol = it->second.initialSessionVolume;
+                fOriginalMasterVol = it->second.initialMasterVolume;
+                
+                // DETECT EXTERNAL/MANUAL ADJUSTMENT:
+                // Check if the current volume differs from what we expected based on the LAST sync's master volume.
+                float fLastMasterVolRef = m_lastEffectiveVolume.load();
+                if (fLastMasterVolRef >= 0.0f) {
+                    float fExpectedAtLastSync = fOriginalSessionVol;
+                    if (fOriginalMasterVol > 0.01f) {
+                        fExpectedAtLastSync = fOriginalSessionVol * (fLastMasterVolRef / fOriginalMasterVol);
+                    } else {
+                        fExpectedAtLastSync = fOriginalSessionVol * fLastMasterVolRef;
+                    }
+                    if (fExpectedAtLastSync < 0.0f) fExpectedAtLastSync = 0.0f;
+                    if (fExpectedAtLastSync > 1.0f) fExpectedAtLastSync = 1.0f;
+                    
+                    if (std::abs(fCurrentVolume - fExpectedAtLastSync) > 0.015f) {
+                        // User manually adjusted this specific application's slider or the app updated its own volume.
+                        // Update cache to set a new baseline at the current master volume level.
+                        m_sessionVolumeCache[sessionId] = { fCurrentVolume, fMasterVolume };
+                        fOriginalSessionVol = fCurrentVolume;
+                        fOriginalMasterVol = fMasterVolume;
+                        LogInfo(L"Manual adjustment detected for session '%ls'. New baseline cached: %.2f at Master: %.2f\n", 
+                                sessionId.c_str(), fCurrentVolume, fMasterVolume);
+                    }
                 }
-                pSimpleVolume->Release();
             }
+            
+            // Scale proportionally: target = A_initial * (M_current / M_initial)
+            float fTargetVolume = fOriginalSessionVol;
+            if (fOriginalMasterVol > 0.01f) {
+                fTargetVolume = fOriginalSessionVol * (fMasterVolume / fOriginalMasterVol);
+            } else {
+                fTargetVolume = fOriginalSessionVol * fMasterVolume;
+            }
+            
+            if (fTargetVolume < 0.0f) fTargetVolume = 0.0f;
+            if (fTargetVolume > 1.0f) fTargetVolume = 1.0f;
+            
+            // Optimize: check difference threshold to avoid flooding Windows Audio Service (AudioSrv) IPC
+            if (std::abs(fCurrentVolume - fTargetVolume) > 0.001f) {
+                pSimpleVolume->SetMasterVolume(fTargetVolume, NULL);
+            }
+            pSimpleVolume->Release();
+        }
+        
+        if (hasControl2) {
+            pSessionControl2->Release();
         }
         pSessionControl->Release();
     }
@@ -715,16 +739,11 @@ void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManage
     pSessionEnumerator->Release();
 }
 
-/**
- * @brief Restores volume levels of all active audio sessions globally to 100%.
- */
 void VolumeSyncService::RestoreSessionOriginalVolumes() {
     if (!m_pEnumerator) return;
     
-    LogEssential(L"Restoring all session volume levels on all active devices to 100%...\n");
+    LogEssential(L"Restoring all session volume levels on all active devices to their original cached volumes...\n");
     
-    // Switch-away volume restoration: resets app volumes on all active audio devices
-    // back to 100% (1.0f) to ensure they are fully audible on secondary outputs.
     IMMDeviceCollection* pCollection = NULL;
     HRESULT hr = m_pEnumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &pCollection);
     if (FAILED(hr)) return;
@@ -747,12 +766,9 @@ void VolumeSyncService::RestoreSessionOriginalVolumes() {
     }
     
     pCollection->Release();
+    m_sessionVolumeCache.clear();
 }
 
-/**
- * @brief Resets sessions on a specific session manager back to 100%.
- * @param pSessionManager Session manager of an audio endpoint.
- */
 void VolumeSyncService::RestoreDeviceSessions(IAudioSessionManager2* pSessionManager) {
     if (!pSessionManager) return;
     
@@ -768,19 +784,100 @@ void VolumeSyncService::RestoreDeviceSessions(IAudioSessionManager2* pSessionMan
         hr = pSessionEnumerator->GetSession(i, &pSessionControl);
         if (FAILED(hr)) continue;
         
-        ISimpleAudioVolume* pSimpleVolume = NULL;
-        hr = pSessionControl->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pSimpleVolume);
-        if (SUCCEEDED(hr)) {
-            float fCurrentVolume = 1.0f;
-            pSimpleVolume->GetMasterVolume(&fCurrentVolume);
-            // Verify if update is needed to avoid redundant COM IPC calls.
-            if (std::abs(fCurrentVolume - 1.0f) > 0.001f) {
-                pSimpleVolume->SetMasterVolume(1.0f, NULL);
+        IAudioSessionControl2* pSessionControl2 = NULL;
+        hr = pSessionControl->QueryInterface(__uuidof(IAudioSessionControl2), (void**)&pSessionControl2);
+        std::wstring sessionId;
+        bool hasControl2 = SUCCEEDED(hr) && pSessionControl2;
+        if (hasControl2) {
+            GetSessionId(pSessionControl2, sessionId);
+        } else {
+            sessionId = GetFallbackSessionId(pSessionControl);
+        }
+        
+        auto it = m_sessionVolumeCache.find(sessionId);
+        if (it != m_sessionVolumeCache.end()) {
+            float fOriginalVolume = it->second.initialSessionVolume;
+            ISimpleAudioVolume* pSimpleVolume = NULL;
+            hr = pSessionControl->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pSimpleVolume);
+            if (SUCCEEDED(hr) && pSimpleVolume) {
+                float fCurrentVolume = 1.0f;
+                pSimpleVolume->GetMasterVolume(&fCurrentVolume);
+                if (std::abs(fCurrentVolume - fOriginalVolume) > 0.001f) {
+                    pSimpleVolume->SetMasterVolume(fOriginalVolume, NULL);
+                }
+                pSimpleVolume->Release();
             }
-            pSimpleVolume->Release();
+        }
+        
+        if (hasControl2) {
+            pSessionControl2->Release();
         }
         pSessionControl->Release();
     }
     
     pSessionEnumerator->Release();
+}
+
+void VolumeSyncService::RegisterNewSession(IAudioSessionControl* pSessionControl) {
+    if (!pSessionControl) return;
+    
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    IAudioSessionControl2* pSessionControl2 = NULL;
+    HRESULT hr = pSessionControl->QueryInterface(__uuidof(IAudioSessionControl2), (void**)&pSessionControl2);
+    std::wstring sessionId;
+    bool hasControl2 = SUCCEEDED(hr) && pSessionControl2;
+    if (hasControl2) {
+        GetSessionId(pSessionControl2, sessionId);
+    } else {
+        sessionId = GetFallbackSessionId(pSessionControl);
+    }
+    
+    ISimpleAudioVolume* pSimpleVolume = NULL;
+    hr = pSessionControl->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pSimpleVolume);
+    if (SUCCEEDED(hr) && pSimpleVolume) {
+        float fCurrentVolume = 1.0f;
+        pSimpleVolume->GetMasterVolume(&fCurrentVolume);
+        
+        float fMasterVolume = m_lastEffectiveVolume.load();
+        if (fMasterVolume < 0.0f) fMasterVolume = 1.0f; // Default if not hooked yet
+        
+        // Cache the session's starting volume level.
+        // We assume the starting volume of the session is its baseline when master is 100%.
+        m_sessionVolumeCache[sessionId] = { fCurrentVolume, 1.0f };
+        LogInfo(L"New session '%ls' cached. Initial Volume: %.2f\n", sessionId.c_str(), fCurrentVolume);
+        
+        // Scale it immediately to match current master volume proportion
+        float fTargetVolume = fCurrentVolume * fMasterVolume;
+        if (fTargetVolume < 0.0f) fTargetVolume = 0.0f;
+        if (fTargetVolume > 1.0f) fTargetVolume = 1.0f;
+        
+        if (std::abs(fCurrentVolume - fTargetVolume) > 0.001f) {
+            pSimpleVolume->SetMasterVolume(fTargetVolume, NULL);
+            LogInfo(L"Immediately initialized new session volume to: %.2f\n", fTargetVolume);
+        }
+        pSimpleVolume->Release();
+    }
+    
+    if (hasControl2) {
+        pSessionControl2->Release();
+    }
+}
+
+bool VolumeSyncService::GetSessionId(IAudioSessionControl2* pSessionControl2, std::wstring& outId) {
+    if (!pSessionControl2) return false;
+    LPWSTR pwszId = NULL;
+    HRESULT hr = pSessionControl2->GetSessionInstanceIdentifier(&pwszId);
+    if (SUCCEEDED(hr) && pwszId) {
+        outId = pwszId;
+        CoTaskMemFree(pwszId);
+        return true;
+    }
+    return false;
+}
+
+std::wstring VolumeSyncService::GetFallbackSessionId(IAudioSessionControl* pSessionControl) {
+    wchar_t buf[64];
+    swprintf_s(buf, L"PTR_%p", pSessionControl);
+    return buf;
 }

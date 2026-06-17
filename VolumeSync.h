@@ -210,6 +210,12 @@ private:
     std::atomic<bool> m_isMuted;                         /**< Atomic flag indicating if target device is currently muted. */
     std::mutex m_mutex;                                  /**< Mutex protecting multi-threaded COM calls and state changes. */
 
+    struct SessionVolumeInfo {
+        float initialSessionVolume; /**< The session's volume when first cached. */
+        float initialMasterVolume;  /**< The master volume of the target device when this session was first cached. */
+    };
+    std::map<std::wstring, SessionVolumeInfo> m_sessionVolumeCache; /**< Cache of original application and master volume pairs. */
+
     /**
      * @brief Retrives the user-friendly name of an audio device.
      * @param pDevice Pointer to the target IMMDevice.
@@ -224,6 +230,21 @@ private:
      * @return True if the name matches target criteria, false otherwise.
      */
     bool IsTargetDevice(const std::wstring& deviceName);
+
+    /**
+     * @brief Resolves a unique session ID for a session.
+     * @param pSessionControl2 Pointer to the control interface.
+     * @param outId Receives the resolved string ID.
+     * @return True on success, false on failure.
+     */
+    bool GetSessionId(IAudioSessionControl2* pSessionControl2, std::wstring& outId);
+
+    /**
+     * @brief Generates a fallback pointer-based session ID.
+     * @param pSessionControl Pointer to the session control.
+     * @return Fallback session ID string.
+     */
+    std::wstring GetFallbackSessionId(IAudioSessionControl* pSessionControl);
     
 public:
     /**
@@ -279,6 +300,12 @@ public:
      * @param bMuted Mute status.
      */
     void HandleVolumeChanged(float fNewVolume, BOOL bMuted);
+
+    /**
+     * @brief Registers and initializes a newly created audio session.
+     * @param pSessionControl Pointer to the session control.
+     */
+    void RegisterNewSession(IAudioSessionControl* pSessionControl);
 
     /**
      * @brief Evaluates the current default device and establishes or tears down hooks as appropriate.
