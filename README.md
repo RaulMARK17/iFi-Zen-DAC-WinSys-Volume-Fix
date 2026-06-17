@@ -1,105 +1,90 @@
-# 🔊 iFi Zen DAC Windows System Volume Fix
+# iFi Zen DAC Windows System Volume Sync
 
-Este proyecto es una utilidad ligera en C++ diseñada para corregir y unificar el control de volumen del sistema en Windows cuando se utiliza un DAC **iFi Zen** (o dispositivos compatibles), sin depender de software de terceros.
+A lightweight background utility for Windows that enables system volume control for iFi Zen DACs (and similar devices) by dynamically scaling individual application volumes.
 
----
+## The Problem
+By design, iFi Zen DACs bypass the Windows master volume control. The audio stream is passed directly to the hardware, making the Windows master volume slider and media keys ineffective. While this is ideal for bit-perfect playback, it is highly inconvenient for everyday use when you want to quickly adjust the volume using your keyboard keys or the OS volume slider.
 
-## 📋 Tabla de Contenidos
-- [¿Cuál es el problema?](#-cuál-es-el-problema)
-- [Nuestra Solución](#-nuestra-solución)
-- [Características Principales](#-características-principales)
-- [Capturas de Pantalla](#-capturas-de-pantalla)
-- [Instalación Rápida](#-instalación-rápida)
-- [Compilación (Desarrolladores)](#-compilación-desarrolladores)
-- [¿Cómo funciona técnicamente?](#-cómo-funciona-técnicamente)
-
----
-
-## ❓ ¿Cuál es el problema?
-Al utilizar un DAC USB externo como el **iFi Zen DAC** en Windows, el control de volumen maestro de Windows a menudo no escala de forma proporcional o directa el volumen de las sesiones de audio individuales de las aplicaciones (por ejemplo, Spotify, Chrome, Discord, etc.). Esto puede provocar que el sonido sea extremadamente fuerte en ciertas aplicaciones o que los controles de volumen multimedia del teclado no funcionen correctamente para controlar el nivel global de todas las aplicaciones de forma unificada.
-
-## 💡 Nuestra Solución
-Este programa es un servicio ligero que se ejecuta en segundo plano (en la bandeja del sistema o *system tray*):
-1. **Detecta automáticamente** cuando tu iFi Zen DAC está activo como dispositivo por defecto.
-2. **Escucha en tiempo real** los cambios del volumen maestro del sistema.
-3. **Sincroniza y escala proporcionalmente** el volumen de cada sesión de audio individual activa en Windows a través de todos los endpoints de audio activos.
-4. **Evita picos repentinos de sonido**: Al iniciar una nueva aplicación o reproducir audio, el programa ajusta instantáneamente su volumen inicial al nivel maestro actual para evitar explosiones de volumen.
+## The Solution
+This utility runs as a lightweight background service in the system tray. When you adjust the Windows system volume:
+1. It intercepts the master volume change.
+2. Instead of attempting to change the master volume (which the DAC ignores), it dynamically adjusts the volume of every active application session (e.g., Spotify, Chrome, Discord).
+3. It scales application volumes proportionally, preserving the relative volume balance (mix) you have manually configured between different applications.
+4. It instantly scales newly opened applications to the current volume level, preventing sudden volume spikes.
 
 ---
 
-## ✨ Características Principales
-* **100% Nativo y Eficiente**: Escrito en C++17 moderno utilizando exclusivamente las APIs nativas de Windows Core Audio (MMDeviceAPI, WASAPI).
-* **Consumo de recursos casi nulo**: Sin interfaces pesadas ni frameworks web; funciona como una aplicación Win32 optimizada e invisible en segundo plano.
-* **Autorecuperación (Self-Healing)**: Si desconectas y vuelves a conectar el DAC, el servicio detecta el cambio automáticamente en un intervalo de 2 segundos y vuelve a acoplarse.
-* **Menú en la Bandeja del Sistema**: Un icono discreto en la barra de tareas te permite pausar, reanudar, reiniciar o salir del servicio en cualquier momento.
-* **Inicio con Windows**: Incluye un script de PowerShell para configurar la ejecución automática al iniciar sesión de forma sencilla.
+## Features
+* **Zero Latency**: Written in native C++17 using Windows Core Audio APIs (MMDeviceAPI/WASAPI).
+* **Minimal Footprint**: Runs in the background as a hidden helper window with a system tray icon. No bloated UI or third-party frameworks.
+* **Preserves Volume Mix**: Adjusts application volumes relative to their initial baseline settings.
+* **Auto-Reconnect**: Detects when the DAC is connected or disconnected and hooks/unhooks volume listeners within 2 seconds.
+* **Startup Integration**: Includes a PowerShell script to easily configure the service to run at Windows startup.
 
 ---
 
-## 📸 Capturas de Pantalla
+## Screenshots
 
-### Menú Desplegable (Bandeja del Sistema)
-El programa cuenta con un menú contextual simple y discreto al hacer clic derecho sobre el icono en la bandeja de entrada:
+### System Tray Menu
+Right-clicking the tray icon provides quick options to pause, resume, restart, or exit the service.
 
 <p align="center">
-  <img src="assets/menu.png" alt="Menú contextual del System Tray" width="300px"/>
+  <img src="assets/menu.png" alt="System Tray Menu" width="300px"/>
 </p>
 
-### Muestra de Funcionamiento
-Aquí se muestra cómo el servicio se ejecuta en segundo plano y realiza la sincronización en tiempo real:
+### Service in Action
+A sample view of the service running in the background and logging volume synchronization:
 
 <p align="center">
-  <img src="assets/ss.png" alt="Demostración de funcionamiento" width="600px"/>
+  <img src="assets/ss.png" alt="Service running sample" width="600px"/>
 </p>
 
 ---
 
-## 🚀 Instalación Rápida
+## Installation
 
-Para instalar y configurar el servicio para que se inicie automáticamente con Windows:
-
-1. Asegúrate de tener compilado el proyecto (ver sección [Compilación](#-compilación-desarrolladores)).
-2. Abre **PowerShell** en la carpeta del proyecto.
-3. Ejecuta el script de configuración de autostart:
+1. Compile the project (see [Building from Source](#building-from-source)).
+2. Open **PowerShell** in the repository root directory.
+3. Run the configuration script to register the service to launch at startup:
    ```powershell
    .\Configure-Autostart.ps1
    ```
-4. ¡Listo! El programa se iniciará en segundo plano y se agregará al registro de Windows (`HKCU:\Software\Microsoft\Windows\CurrentVersion\Run`) para iniciarse automáticamente en cada inicio de sesión.
+   *This registers the service in the registry (`HKCU:\Software\Microsoft\Windows\CurrentVersion\Run`) and starts the process in the background.*
 
-*Para desinstalar y quitar el programa del inicio de Windows, simplemente ejecuta:*
+To uninstall and remove the startup entry:
 ```powershell
 .\Configure-Autostart.ps1 -Uninstall
 ```
 
 ---
 
-## 🛠️ Compilación (Desarrolladores)
+## Building from Source
 
-Si deseas compilar el ejecutable por ti mismo, necesitas tener instalado [CMake](https://cmake.org/) y el compilador de C++ de Visual Studio (MSVC).
+To compile the executable, you need [CMake](https://cmake.org/) and the MSVC C++ compiler (Visual Studio).
 
-1. Abre una terminal de comandos (cmd o PowerShell) en la carpeta raíz del proyecto.
-2. Crea el directorio de construcción:
+1. Open a terminal in the project root folder.
+2. Create and enter a build directory:
    ```cmd
    mkdir build
    cd build
    ```
-3. Genera los archivos del proyecto CMake:
+3. Generate the build files:
    ```cmd
    cmake ..
    ```
-4. Compila el ejecutable en modo Release:
+4. Build the executable in Release mode:
    ```cmd
    cmake --build . --config Release
    ```
-5. El ejecutable compilado `ifi_volume_sync.exe` se generará en la carpeta `build/` (o `build/Release/` según tu generador de CMake).
+The compiled executable `ifi_volume_sync.exe` will be generated in `build/` (or `build/Release/`).
 
 ---
 
-## ⚙️ ¿Cómo funciona técnicamente?
-El programa utiliza las interfaces COM de Windows Core Audio:
-* `IMMDeviceEnumerator` y `IMMNotificationClient` para detectar cambios en el dispositivo de reproducción por defecto.
-* `IAudioEndpointVolume` e `IAudioEndpointVolumeCallback` para recibir notificaciones cuando cambias el volumen maestro de tu DAC.
-* `IAudioSessionManager2` e `IAudioSessionEnumerator` para buscar y listar todas las aplicaciones que están reproduciendo sonido.
-* `IAudioSessionNotification` para capturar en tiempo real la creación de nuevas sesiones de audio y escalarlas instantáneamente.
+## Technical Details
+The utility uses Windows Core Audio COM interfaces:
+* `IMMDeviceEnumerator` and `IMMNotificationClient` to monitor default audio endpoint changes.
+* `IAudioEndpointVolume` and `IAudioEndpointVolumeCallback` to capture master volume changes.
+* `IAudioSessionManager2` and `IAudioSessionEnumerator` to discover running audio sessions.
+* `IAudioSessionNotification` to automatically intercept new application sessions.
 
-Para evitar bloqueos de hilos (deadlocks) en COM, la re-evaluación del dispositivo tras un cambio se delega a un hilo secundario independiente (`std::thread`).
+Device status re-evaluation is delegated to a detached worker thread (`std::thread`) to prevent COM reentrant deadlocks on the main audio dispatch callback thread.
