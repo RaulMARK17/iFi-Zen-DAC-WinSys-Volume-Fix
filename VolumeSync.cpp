@@ -481,7 +481,7 @@ bool VolumeSyncService::HookVolume(IMMDevice* pDevice) {
     }
 
     // Sync current volume to all sessions immediately
-    SyncMasterVolumeToSessionsInternal(m_lastEffectiveVolume);
+    SyncMasterVolumeToSessionsInternal(m_lastEffectiveVolume, true);
     
     return true;
 }
@@ -565,27 +565,29 @@ void VolumeSyncService::HandleVolumeChanged(float fNewVolume, BOOL bMuted) {
     float fEffectiveVolume = bMuted ? 0.0f : fNewVolume;
     LogInfo(L"Volume Callback - Master Volume changed to: %.2f (Muted: %s)\n", fNewVolume, bMuted ? L"YES" : L"NO");
     
-    SyncMasterVolumeToSessionsInternal(fEffectiveVolume);
+    SyncMasterVolumeToSessionsInternal(fEffectiveVolume, false);
     m_lastEffectiveVolume = fEffectiveVolume;
 }
 
 /**
  * @brief Thread-safe wrapper to synchronize all application sessions across all active endpoints.
  * @param fMasterVolume Target volume scalar [0.0, 1.0].
+ * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
  */
-void VolumeSyncService::SyncMasterVolumeToSessions(float fMasterVolume) {
+void VolumeSyncService::SyncMasterVolumeToSessions(float fMasterVolume, bool bForceUpdateBaselines) {
     // Thread-safe public entry point. Locks the service mutex to serialize 
     // COM access during volume updates.
     std::lock_guard<std::mutex> lock(m_mutex);
-    SyncMasterVolumeToSessionsInternal(fMasterVolume);
+    SyncMasterVolumeToSessionsInternal(fMasterVolume, bForceUpdateBaselines);
 }
 
 /**
  * @brief Internal routine to perform multi-device session volume synchronization.
  * @param fMasterVolume Target volume scalar [0.0, 1.0].
+ * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
  * @note Caller must hold m_mutex.
  */
-void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume) {
+void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume, bool bForceUpdateBaselines) {
     if (!m_pEnumerator) return;
     
     // ENUMERATE ALL ACTIVE PLAYBACK DEVICES:
@@ -611,7 +613,7 @@ void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume) 
             IAudioSessionManager2* pSessionManager = NULL;
             hr = pDevice->Activate(__uuidof(IAudioSessionManager2), CLSCTX_INPROC_SERVER, NULL, (void**)&pSessionManager);
             if (SUCCEEDED(hr) && pSessionManager) {
-                SyncDeviceSessions(pSessionManager, fMasterVolume);
+                SyncDeviceSessions(pSessionManager, fMasterVolume, bForceUpdateBaselines);
                 pSessionManager->Release();
             }
             pDevice->Release();
@@ -625,8 +627,9 @@ void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume) 
  * @brief Enumerates and synchronizes sessions associated with a specific session manager.
  * @param pSessionManager Session manager of an audio endpoint.
  * @param fMasterVolume Target volume scalar [0.0, 1.0].
+ * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
  */
-void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManager, float fMasterVolume) {
+void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManager, float fMasterVolume, bool bForceUpdateBaselines) {
     if (!pSessionManager) return;
     
     IAudioSessionEnumerator* pSessionEnumerator = NULL;
@@ -671,63 +674,48 @@ void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManage
             float fCurrentVolume = 1.0f;
             pSimpleVolume->GetMasterVolume(&fCurrentVolume);
             
-            // Look up or cache original session volume level
-            float fOriginalSessionVol = 1.0f;
-            float fOriginalMasterVol = 1.0f;
+            float fBaseline = 1.0f;
             
             auto it = m_sessionVolumeCache.find(sessionId);
-            if (it == m_sessionVolumeCache.end()) {
-                // Not in cache, this is first contact with the session. Cache its current volume!
-                float fRefMaster = fMasterVolume;
-                if (fRefMaster < 0.10f) {
-                    fRefMaster = 1.0f;
-                }
-                m_sessionVolumeCache[sessionId] = { fCurrentVolume, fRefMaster };
-                fOriginalSessionVol = fCurrentVolume;
-                fOriginalMasterVol = fRefMaster;
-                LogInfo(L"Session '%ls' cached. Initial Volume: %.2f, Master Reference: %.2f\n", 
-                        sessionId.c_str(), fCurrentVolume, fRefMaster);
+            bool bExists = (it != m_sessionVolumeCache.end());
+            
+            if (!bExists || bForceUpdateBaselines) {
+                // Cache or update current volume as baseline.
+                m_sessionVolumeCache[sessionId] = fCurrentVolume;
+                fBaseline = fCurrentVolume;
+                LogInfo(L"Session '%ls' cached baseline volume: %.2f\n", 
+                        sessionId.c_str(), fCurrentVolume);
             } else {
-                fOriginalSessionVol = it->second.initialSessionVolume;
-                fOriginalMasterVol = it->second.initialMasterVolume;
+                fBaseline = it->second;
                 
                 // DETECT EXTERNAL/MANUAL ADJUSTMENT:
-                // Check if the current volume differs from what we expected based on the LAST sync's master volume.
+                // Check if current volume differs from what we expected based on the last sync master volume.
                 float fLastMasterVolRef = m_lastEffectiveVolume.load();
                 if (fLastMasterVolRef >= 0.0f) {
-                    float fExpectedAtLastSync = fOriginalSessionVol;
-                    if (fOriginalMasterVol > 0.01f) {
-                        fExpectedAtLastSync = fOriginalSessionVol * (fLastMasterVolRef / fOriginalMasterVol);
-                    } else {
-                        fExpectedAtLastSync = fOriginalSessionVol * fLastMasterVolRef;
-                    }
+                    float fExpectedAtLastSync = fBaseline * fLastMasterVolRef;
                     if (fExpectedAtLastSync < 0.0f) fExpectedAtLastSync = 0.0f;
                     if (fExpectedAtLastSync > 1.0f) fExpectedAtLastSync = 1.0f;
                     
                     if (std::abs(fCurrentVolume - fExpectedAtLastSync) > 0.015f) {
                         // User manually adjusted this specific application's slider or the app updated its own volume.
-                        // Update cache to set a new baseline at the current master volume level.
-                        float fRefMaster = fMasterVolume;
-                        if (fRefMaster < 0.10f) {
-                            fRefMaster = 1.0f;
+                        // Calculate new baseline so that at the current master volume, the output matches fCurrentVolume.
+                        float fNewBaseline = fCurrentVolume;
+                        if (fMasterVolume > 0.05f) {
+                            fNewBaseline = fCurrentVolume / fMasterVolume;
                         }
-                        m_sessionVolumeCache[sessionId] = { fCurrentVolume, fRefMaster };
-                        fOriginalSessionVol = fCurrentVolume;
-                        fOriginalMasterVol = fRefMaster;
-                        LogInfo(L"Manual adjustment detected for session '%ls'. New baseline cached: %.2f at Master: %.2f\n", 
-                                sessionId.c_str(), fCurrentVolume, fRefMaster);
+                        if (fNewBaseline > 1.0f) fNewBaseline = 1.0f;
+                        if (fNewBaseline < 0.0f) fNewBaseline = 0.0f;
+                        
+                        m_sessionVolumeCache[sessionId] = fNewBaseline;
+                        fBaseline = fNewBaseline;
+                        LogInfo(L"Manual adjustment detected for session '%ls'. Current Volume: %.2f. New baseline: %.2f (Master: %.2f)\n", 
+                                sessionId.c_str(), fCurrentVolume, fNewBaseline, fMasterVolume);
                     }
                 }
             }
             
-            // Scale proportionally: target = A_initial * (M_current / M_initial)
-            float fTargetVolume = fOriginalSessionVol;
-            if (fOriginalMasterVol > 0.01f) {
-                fTargetVolume = fOriginalSessionVol * (fMasterVolume / fOriginalMasterVol);
-            } else {
-                fTargetVolume = fOriginalSessionVol * fMasterVolume;
-            }
-            
+            // Scale proportionally: target = baseline * current_master_volume
+            float fTargetVolume = fBaseline * fMasterVolume;
             if (fTargetVolume < 0.0f) fTargetVolume = 0.0f;
             if (fTargetVolume > 1.0f) fTargetVolume = 1.0f;
             
@@ -774,7 +762,7 @@ void VolumeSyncService::RestoreSessionOriginalVolumes() {
     }
     
     pCollection->Release();
-    m_sessionVolumeCache.clear();
+    // Note: Do NOT clear the cache here to maintain baselines for closed/inactive apps or across device switches.
 }
 
 void VolumeSyncService::RestoreDeviceSessions(IAudioSessionManager2* pSessionManager) {
@@ -804,7 +792,7 @@ void VolumeSyncService::RestoreDeviceSessions(IAudioSessionManager2* pSessionMan
         
         auto it = m_sessionVolumeCache.find(sessionId);
         if (it != m_sessionVolumeCache.end()) {
-            float fOriginalVolume = it->second.initialSessionVolume;
+            float fOriginalVolume = it->second;
             ISimpleAudioVolume* pSimpleVolume = NULL;
             hr = pSessionControl->QueryInterface(__uuidof(ISimpleAudioVolume), (void**)&pSimpleVolume);
             if (SUCCEEDED(hr) && pSimpleVolume) {
@@ -850,9 +838,8 @@ void VolumeSyncService::RegisterNewSession(IAudioSessionControl* pSessionControl
         float fMasterVolume = m_lastEffectiveVolume.load();
         if (fMasterVolume < 0.0f) fMasterVolume = 1.0f; // Default if not hooked yet
         
-        // Cache the session's starting volume level.
-        // We assume the starting volume of the session is its baseline when master is 100%.
-        m_sessionVolumeCache[sessionId] = { fCurrentVolume, 1.0f };
+        // Cache the session's starting volume level as its baseline.
+        m_sessionVolumeCache[sessionId] = fCurrentVolume;
         LogInfo(L"New session '%ls' cached. Initial Volume: %.2f\n", sessionId.c_str(), fCurrentVolume);
         
         // Scale it immediately to match current master volume proportion

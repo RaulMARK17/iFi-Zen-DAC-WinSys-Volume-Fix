@@ -210,11 +210,7 @@ private:
     std::atomic<bool> m_isMuted;                         /**< Atomic flag indicating if target device is currently muted. */
     std::mutex m_mutex;                                  /**< Mutex protecting multi-threaded COM calls and state changes. */
 
-    struct SessionVolumeInfo {
-        float initialSessionVolume; /**< The session's volume when first cached. */
-        float initialMasterVolume;  /**< The master volume of the target device when this session was first cached. */
-    };
-    std::map<std::wstring, SessionVolumeInfo> m_sessionVolumeCache; /**< Cache of original application and master volume pairs. */
+    std::map<std::wstring, float> m_sessionVolumeCache;  /**< Cache mapping session instance IDs to original baseline volumes. */
 
     /**
      * @brief Retrives the user-friendly name of an audio device.
@@ -324,25 +320,28 @@ public:
      */
     void UnhookVolume();
 
-    /**
-     * @brief Thread-safe wrapper to synchronize all application sessions across all active endpoints.
-     * @param fMasterVolume Target volume scalar [0.0, 1.0].
-     */
-    void SyncMasterVolumeToSessions(float fMasterVolume);
-
-    /**
-     * @brief Internal routine to perform multi-device session volume synchronization.
-     * @param fMasterVolume Target volume scalar [0.0, 1.0].
-     * @note Caller must hold m_mutex.
-     */
-    void SyncMasterVolumeToSessionsInternal(float fMasterVolume);
-
-    /**
-     * @brief Enumerates and synchronizes sessions associated with a specific session manager.
-     * @param pSessionManager Session manager of an audio endpoint.
-     * @param fMasterVolume Target volume scalar [0.0, 1.0].
-     */
-    void SyncDeviceSessions(IAudioSessionManager2* pSessionManager, float fMasterVolume);
+     /**
+      * @brief Thread-safe wrapper to synchronize all application sessions across all active endpoints.
+      * @param fMasterVolume Target volume scalar [0.0, 1.0].
+      * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+      */
+     void SyncMasterVolumeToSessions(float fMasterVolume, bool bForceUpdateBaselines = false);
+ 
+     /**
+      * @brief Internal routine to perform multi-device session volume synchronization.
+      * @param fMasterVolume Target volume scalar [0.0, 1.0].
+      * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+      * @note Caller must hold m_mutex.
+      */
+     void SyncMasterVolumeToSessionsInternal(float fMasterVolume, bool bForceUpdateBaselines = false);
+ 
+     /**
+      * @brief Enumerates and synchronizes sessions associated with a specific session manager.
+      * @param pSessionManager Session manager of an audio endpoint.
+      * @param fMasterVolume Target volume scalar [0.0, 1.0].
+      * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+      */
+     void SyncDeviceSessions(IAudioSessionManager2* pSessionManager, float fMasterVolume, bool bForceUpdateBaselines = false);
     
     /**
      * @brief Restores volume levels of all active audio sessions globally to 100%.
