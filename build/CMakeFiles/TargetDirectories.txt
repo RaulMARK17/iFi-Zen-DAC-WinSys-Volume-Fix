@@ -1,0 +1,3 @@
+C:/Users/AL204/OneDrive/Documentos/WindowsVolumeFixZenDAC/build/CMakeFiles/ifi_volume_sync.dir
+C:/Users/AL204/OneDrive/Documentos/WindowsVolumeFixZenDAC/build/CMakeFiles/edit_cache.dir
+C:/Users/AL204/OneDrive/Documentos/WindowsVolumeFixZenDAC/build/CMakeFiles/rebuild_cache.dir

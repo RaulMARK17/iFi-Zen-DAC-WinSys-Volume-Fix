@@ -1,0 +1,111 @@
+/**
+ * @file main.cpp
+ * @brief Application entry point and main message loop for the background volume synchronization service.
+ * @details Implements a lightweight, hidden Win32 application that registers a global mutex
+ *          to prevent duplicate instances, initializes COM, starts a self-healing timer,
+ *          and runs a background message pump to handle notifications.
+ */
+
+#include <windows.h>
+#include "VolumeSync.h"
+
+/**
+ * @brief Global pointer referencing the active VolumeSyncService instance.
+ * @details Required by the Win32 TimerCallback, which runs on a system thread pool
+ *          and lacks access to a local class context.
+ */
+VolumeSyncService* g_pService = NULL;
+
+/**
+ * @brief Timer callback routine called periodically (every 2 seconds).
+ * @param hwnd Handle to the window associated with the timer (NULL in this service).
+ * @param uMsg WM_TIMER message.
+ * @param idEvent Timer identifier.
+ * @param dwTime System time in milliseconds.
+ * @details Runs self-healing checks when the iFi DAC is disconnected (to re-hook)
+ *          and executes global volume updates periodically when hooked to catch
+ *          newly created sessions on virtual cables or other devices.
+ */
+VOID CALLBACK TimerCallback(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime) {
+    if (g_pService) {
+        if (!g_pService->IsHooked()) {
+            g_pService->CheckAndConfigureDevice();
+        } else {
+            float lastVol = g_pService->GetLastEffectiveVolume();
+            if (lastVol >= 0.0f) {
+                g_pService->SyncMasterVolumeToSessions(lastVol);
+            }
+        }
+    }
+}
+
+/**
+ * @brief Entry point of the Win32 GUI application subsystem.
+ * @param hInstance Handle to the current instance of the application.
+ * @param hPrevInstance Handle to the previous instance of the application (always NULL in Win32).
+ * @param lpCmdLine Pointer to a null-terminated command line string.
+ * @param nCmdShow Specifies how the window is to be shown.
+ * @return Exit code of the application (0 on success, non-zero on failure).
+ */
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    // Ensure only one instance of the service is running at any time
+    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Global\\ifiZenDACVolumeSyncServiceMutex");
+    if (hMutex == NULL) {
+        return 1;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        LogEssential(L"Another instance of ifiZenDACVolumeSyncService is already running. Exiting.\n");
+        CloseHandle(hMutex);
+        return 0;
+    }
+
+    // Initialize COM Library for multithreaded operations
+    HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    if (FAILED(hr)) {
+        LogEssential(L"Failed to initialize COM. hr = 0x%08X\n", hr);
+        CloseHandle(hMutex);
+        return 1;
+    }
+
+    LogEssential(L"ifi Zen DAC Volume Sync Service starting...\n");
+
+    VolumeSyncService service;
+    g_pService = &service;
+
+    // Set up a self-healing timer to verify and reconnect every 2 seconds.
+    // This safeguards against device initialization race conditions on startup or hot-plugs.
+    UINT_PTR timerId = SetTimer(NULL, 0, 2000, TimerCallback);
+    if (timerId == 0) {
+        LogEssential(L"Failed to set self-healing timer.\n");
+    }
+
+    if (service.Initialize()) {
+        LogEssential(L"Service initialized successfully. Running background message loop...\n");
+        
+        // Message loop to keep the thread alive and process COM notifications on callback threads
+        MSG msg;
+        while (GetMessage(&msg, NULL, 0, 0)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        
+        if (timerId != 0) {
+            KillTimer(NULL, timerId);
+        }
+        g_pService = NULL;
+        
+        service.Shutdown();
+    } else {
+        LogEssential(L"Failed to initialize VolumeSyncService.\n");
+        if (timerId != 0) {
+            KillTimer(NULL, timerId);
+        }
+        g_pService = NULL;
+    }
+
+    CoUninitialize();
+    
+    LogEssential(L"ifi Zen DAC Volume Sync Service exiting.\n");
+    CloseHandle(hMutex);
+    return 0;
+}
