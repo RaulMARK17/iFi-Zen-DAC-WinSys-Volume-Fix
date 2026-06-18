@@ -220,6 +220,26 @@ private:
     void LoadConfig();
 
     /**
+     * @brief Resolves the clean executable name from a session ID.
+     */
+    std::wstring GetExeNameFromSessionId(const std::wstring& sessionId);
+
+    /**
+     * @brief Gets the path to the baselines.ini configuration file.
+     */
+    std::wstring GetBaselinesConfigPath();
+
+    /**
+     * @brief Reads a baseline volume from baselines.ini.
+     */
+    float GetPersistentBaseline(const std::wstring& exeName);
+
+    /**
+     * @brief Writes a baseline volume to baselines.ini.
+     */
+    void SetPersistentBaseline(const std::wstring& exeName, float baseline);
+
+    /**
      * @brief Retrives the user-friendly name of an audio device.
      * @param pDevice Pointer to the target IMMDevice.
      * @param outName Receives the device friendly name.
@@ -344,28 +364,31 @@ public:
      */
     void UnhookVolume();
 
-     /**
-      * @brief Thread-safe wrapper to synchronize all application sessions across all active endpoints.
-      * @param fMasterVolume Target volume scalar [0.0, 1.0].
-      * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
-      */
-     void SyncMasterVolumeToSessions(float fMasterVolume, bool bForceUpdateBaselines = false);
- 
-     /**
-      * @brief Internal routine to perform multi-device session volume synchronization.
-      * @param fMasterVolume Target volume scalar [0.0, 1.0].
-      * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
-      * @note Caller must hold m_mutex.
-      */
-     void SyncMasterVolumeToSessionsInternal(float fMasterVolume, bool bForceUpdateBaselines = false);
- 
-     /**
-      * @brief Enumerates and synchronizes sessions associated with a specific session manager.
-      * @param pSessionManager Session manager of an audio endpoint.
-      * @param fMasterVolume Target volume scalar [0.0, 1.0].
-      * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
-      */
-     void SyncDeviceSessions(IAudioSessionManager2* pSessionManager, float fMasterVolume, bool bForceUpdateBaselines = false);
+      /**
+       * @brief Thread-safe wrapper to synchronize all application sessions across all active endpoints.
+       * @param fMasterVolume Target volume scalar [0.0, 1.0].
+       * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+       * @param bSaveToDisk If true, saves the updated baselines to baselines.ini.
+       */
+      void SyncMasterVolumeToSessions(float fMasterVolume, bool bForceUpdateBaselines = false, bool bSaveToDisk = false);
+  
+      /**
+       * @brief Internal routine to perform multi-device session volume synchronization.
+       * @param fMasterVolume Target volume scalar [0.0, 1.0].
+       * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+       * @param bSaveToDisk If true, saves the updated baselines to baselines.ini.
+       * @note Caller must hold m_mutex.
+       */
+      void SyncMasterVolumeToSessionsInternal(float fMasterVolume, bool bForceUpdateBaselines = false, bool bSaveToDisk = false);
+  
+      /**
+       * @brief Enumerates and synchronizes sessions associated with a specific session manager.
+       * @param pSessionManager Session manager of an audio endpoint.
+       * @param fMasterVolume Target volume scalar [0.0, 1.0].
+       * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+       * @param bSaveToDisk If true, saves the updated baselines to baselines.ini.
+       */
+      void SyncDeviceSessions(IAudioSessionManager2* pSessionManager, float fMasterVolume, bool bForceUpdateBaselines = false, bool bSaveToDisk = false);
     
     /**
      * @brief Restores volume levels of all active audio sessions globally to 100%.

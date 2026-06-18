@@ -368,6 +368,69 @@ void VolumeSyncService::LoadConfig() {
 }
 
 /**
+ * @brief Resolves the clean executable name from a session ID.
+ */
+std::wstring VolumeSyncService::GetExeNameFromSessionId(const std::wstring& sessionId) {
+    size_t lastSlash = sessionId.find_last_of(L"\\");
+    if (lastSlash == std::wstring::npos) {
+        return sessionId; // Fallback if no backslash exists (e.g. PTR-based)
+    }
+    std::wstring exeName = sessionId.substr(lastSlash + 1);
+    size_t percent = exeName.find(L"%");
+    if (percent != std::wstring::npos) {
+        exeName = exeName.substr(0, percent);
+    }
+    // Convert to lowercase
+    std::transform(exeName.begin(), exeName.end(), exeName.begin(), ::towlower);
+    return exeName;
+}
+
+/**
+ * @brief Gets the path to the baselines.ini configuration file.
+ */
+std::wstring VolumeSyncService::GetBaselinesConfigPath() {
+    wchar_t exePath[MAX_PATH];
+    wchar_t configPath[MAX_PATH] = L"";
+    if (GetModuleFileNameW(NULL, exePath, MAX_PATH)) {
+        wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+        if (lastSlash) {
+            *lastSlash = L'\0';
+            swprintf_s(configPath, MAX_PATH, L"%ls\\baselines.ini", exePath);
+        }
+    }
+    return configPath;
+}
+
+/**
+ * @brief Reads a baseline volume from baselines.ini.
+ */
+float VolumeSyncService::GetPersistentBaseline(const std::wstring& exeName) {
+    if (exeName.empty()) return 1.0f;
+    std::wstring path = GetBaselinesConfigPath();
+    wchar_t value[32] = L"";
+    GetPrivateProfileStringW(L"Baselines", exeName.c_str(), L"1.0", value, 32, path.c_str());
+    try {
+        float val = std::wcstof(value, nullptr);
+        if (val < 0.0f) val = 0.0f;
+        if (val > 1.0f) val = 1.0f;
+        return val;
+    } catch (...) {
+        return 1.0f;
+    }
+}
+
+/**
+ * @brief Writes a baseline volume to baselines.ini.
+ */
+void VolumeSyncService::SetPersistentBaseline(const std::wstring& exeName, float baseline) {
+    if (exeName.empty()) return;
+    std::wstring path = GetBaselinesConfigPath();
+    wchar_t value[32];
+    swprintf_s(value, L"%.4f", baseline);
+    WritePrivateProfileStringW(L"Baselines", exeName.c_str(), value, path.c_str());
+}
+
+/**
  * @brief Compares a device friendly name against the target criteria.
  * @param deviceName Friendly name of the audio device.
  * @return True if the name matches config or default criteria.
@@ -519,8 +582,8 @@ bool VolumeSyncService::HookVolume(IMMDevice* pDevice) {
         LogEssential(L"Failed to activate IAudioSessionManager2 in HookVolume. hr = 0x%08X\n", hrSession);
     }
 
-    // Sync current volume to all sessions immediately
-    SyncMasterVolumeToSessionsInternal(m_lastEffectiveVolume, true);
+    // Sync current volume to all sessions immediately, loading baseline volumes from baselines.ini
+    SyncMasterVolumeToSessionsInternal(m_lastEffectiveVolume, true, false);
     
     return true;
 }
@@ -604,7 +667,7 @@ void VolumeSyncService::HandleVolumeChanged(float fNewVolume, BOOL bMuted) {
     float fEffectiveVolume = bMuted ? 0.0f : fNewVolume;
     LogInfo(L"Volume Callback - Master Volume changed to: %.2f (Muted: %s)\n", fNewVolume, bMuted ? L"YES" : L"NO");
     
-    SyncMasterVolumeToSessionsInternal(fEffectiveVolume, false);
+    SyncMasterVolumeToSessionsInternal(fEffectiveVolume, false, false);
     m_lastEffectiveVolume = fEffectiveVolume;
 }
 
@@ -612,21 +675,23 @@ void VolumeSyncService::HandleVolumeChanged(float fNewVolume, BOOL bMuted) {
  * @brief Thread-safe wrapper to synchronize all application sessions across all active endpoints.
  * @param fMasterVolume Target volume scalar [0.0, 1.0].
  * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+ * @param bSaveToDisk If true, saves the updated baselines to baselines.ini.
  */
-void VolumeSyncService::SyncMasterVolumeToSessions(float fMasterVolume, bool bForceUpdateBaselines) {
+void VolumeSyncService::SyncMasterVolumeToSessions(float fMasterVolume, bool bForceUpdateBaselines, bool bSaveToDisk) {
     // Thread-safe public entry point. Locks the service mutex to serialize 
     // COM access during volume updates.
     std::lock_guard<std::mutex> lock(m_mutex);
-    SyncMasterVolumeToSessionsInternal(fMasterVolume, bForceUpdateBaselines);
+    SyncMasterVolumeToSessionsInternal(fMasterVolume, bForceUpdateBaselines, bSaveToDisk);
 }
 
 /**
  * @brief Internal routine to perform multi-device session volume synchronization.
  * @param fMasterVolume Target volume scalar [0.0, 1.0].
  * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+ * @param bSaveToDisk If true, saves the updated baselines to baselines.ini.
  * @note Caller must hold m_mutex.
  */
-void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume, bool bForceUpdateBaselines) {
+void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume, bool bForceUpdateBaselines, bool bSaveToDisk) {
     if (m_isPaused.load()) return;
     if (!m_pEnumerator) return;
     
@@ -653,7 +718,7 @@ void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume, 
             IAudioSessionManager2* pSessionManager = NULL;
             hr = pDevice->Activate(__uuidof(IAudioSessionManager2), CLSCTX_INPROC_SERVER, NULL, (void**)&pSessionManager);
             if (SUCCEEDED(hr) && pSessionManager) {
-                SyncDeviceSessions(pSessionManager, fMasterVolume, bForceUpdateBaselines);
+                SyncDeviceSessions(pSessionManager, fMasterVolume, bForceUpdateBaselines, bSaveToDisk);
                 pSessionManager->Release();
             }
             pDevice->Release();
@@ -668,8 +733,9 @@ void VolumeSyncService::SyncMasterVolumeToSessionsInternal(float fMasterVolume, 
  * @param pSessionManager Session manager of an audio endpoint.
  * @param fMasterVolume Target volume scalar [0.0, 1.0].
  * @param bForceUpdateBaselines If true, active sessions baseline volumes will be updated/overwritten from their current values.
+ * @param bSaveToDisk If true, saves the updated baselines to baselines.ini.
  */
-void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManager, float fMasterVolume, bool bForceUpdateBaselines) {
+void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManager, float fMasterVolume, bool bForceUpdateBaselines, bool bSaveToDisk) {
     if (!pSessionManager) return;
     
     IAudioSessionEnumerator* pSessionEnumerator = NULL;
@@ -721,10 +787,24 @@ void VolumeSyncService::SyncDeviceSessions(IAudioSessionManager2* pSessionManage
             
             if (!bExists || bForceUpdateBaselines) {
                 // Cache or update current volume as baseline.
-                m_sessionVolumeCache[sessionId] = fCurrentVolume;
-                fBaseline = fCurrentVolume;
-                LogInfo(L"Session '%ls' cached baseline volume: %.2f\n", 
-                        sessionId.c_str(), fCurrentVolume);
+                float fBaselineVal = 1.0f;
+                std::wstring exeName = GetExeNameFromSessionId(sessionId);
+                
+                if (bSaveToDisk) {
+                    // We are resuming from pause, so the current volume in Windows is the unscaled baseline.
+                    // We update the cache and write it to baselines.ini.
+                    fBaselineVal = fCurrentVolume;
+                    SetPersistentBaseline(exeName, fBaselineVal);
+                } else {
+                    // We are starting up, switching device, or seeing a new session.
+                    // We load the baseline from baselines.ini (defaulting to 1.0f).
+                    fBaselineVal = GetPersistentBaseline(exeName);
+                }
+                
+                m_sessionVolumeCache[sessionId] = fBaselineVal;
+                fBaseline = fBaselineVal;
+                LogInfo(L"Session '%ls' cached baseline volume: %.2f (Raw: %.2f)\n", 
+                        sessionId.c_str(), fBaselineVal, fCurrentVolume);
             } else {
                 fBaseline = it->second;
             }
@@ -850,15 +930,31 @@ void VolumeSyncService::RegisterNewSession(IAudioSessionControl* pSessionControl
         float fCurrentVolume = 1.0f;
         pSimpleVolume->GetMasterVolume(&fCurrentVolume);
         
+        // If the service is paused, just cache the baseline and return early
+        if (m_isPaused.load()) {
+            m_sessionVolumeCache[sessionId] = fCurrentVolume;
+            LogInfo(L"New session '%ls' cached while paused. Baseline Volume: %.2f\n", sessionId.c_str(), fCurrentVolume);
+            pSimpleVolume->Release();
+            if (hasControl2) {
+                pSessionControl2->Release();
+            }
+            return;
+        }
+        
         float fMasterVolume = m_lastEffectiveVolume.load();
         if (fMasterVolume < 0.0f) fMasterVolume = 1.0f; // Default if not hooked yet
         
+        // Load the persistent baseline from baselines.ini
+        std::wstring exeName = GetExeNameFromSessionId(sessionId);
+        float fBaselineVal = GetPersistentBaseline(exeName);
+        
         // Cache the session's starting volume level as its baseline.
-        m_sessionVolumeCache[sessionId] = fCurrentVolume;
-        LogInfo(L"New session '%ls' cached. Initial Volume: %.2f\n", sessionId.c_str(), fCurrentVolume);
+        m_sessionVolumeCache[sessionId] = fBaselineVal;
+        LogInfo(L"New session '%ls' cached. Initial Volume: %.2f, Loaded Baseline: %.2f\n", 
+                sessionId.c_str(), fCurrentVolume, fBaselineVal);
         
         // Scale it immediately to match current master volume proportion
-        float fTargetVolume = fCurrentVolume * fMasterVolume;
+        float fTargetVolume = fBaselineVal * fMasterVolume;
         if (fTargetVolume < 0.0f) fTargetVolume = 0.0f;
         if (fTargetVolume > 1.0f) fTargetVolume = 1.0f;
         
@@ -903,8 +999,8 @@ void VolumeSyncService::SetPaused(bool bPaused) {
         std::lock_guard<std::mutex> lock(m_mutex);
         RestoreSessionOriginalVolumes();
     } else {
-        // Force baseline update from current Windows volume levels and scale them immediately on resume
-        SyncMasterVolumeToSessions(m_lastEffectiveVolume, true);
+        // Force baseline update from current Windows volume levels, scale them, and save to baselines.ini on resume
+        SyncMasterVolumeToSessions(m_lastEffectiveVolume, true, true);
     }
 }
 
